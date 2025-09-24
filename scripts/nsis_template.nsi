@@ -29,7 +29,6 @@ InstallDir  "$PROGRAMFILES\${APP_DIRNAME}"
 ; ---------- UI 页面 ----------
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
-Page custom SelectPhotoshopPage LeaveSelectPhotoshopPage
 Page custom PreInstallConfirm
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -39,203 +38,66 @@ Page custom PreInstallConfirm
 Var PSPATH
 Var _found
 Var _tmp
-Var PSCount
-Var PSListFile
-Var HWND_PS_COMBO
-Var HWND_PS_INFO
-Var HWND_PS_HELP
 
-; ---------- Photoshop 目录收集 ----------
-Function PathAlreadyRecorded
-  Push $0
-  Push $1
-  Push $2
-  StrCpy $_found "0"
-  StrCpy $1 1
-PathAlreadyRecorded_Loop:
-  IntCmp $1 $PSCount PathAlreadyRecorded_Done PathAlreadyRecorded_Done PathAlreadyRecorded_Continue
-PathAlreadyRecorded_Continue:
-  ReadINIStr $2 $PSListFile "Photoshop" "Path$1"
-  StrCmp $2 "" PathAlreadyRecorded_Next
-  StrCmp $2 $_tmp PathAlreadyRecorded_Found PathAlreadyRecorded_Next
-PathAlreadyRecorded_Next:
-  IntOp $1 $1 + 1
-  Goto PathAlreadyRecorded_Loop
-PathAlreadyRecorded_Found:
-  StrCpy $_found "1"
-PathAlreadyRecorded_Done:
-  Pop $2
-  Pop $1
-  Pop $0
-FunctionEnd
-
-Function AddCandidate
-  Pop $0
-  Push $1
-  StrCmp $0 "" AddCandidate_Done
-  IfFileExists "$0\Photoshop.exe" 0 AddCandidate_Done
-  StrCpy $_tmp "$0"
-  Call PathAlreadyRecorded
-  StrCmp $_found "1" AddCandidate_Done
-  IntOp $PSCount $PSCount + 1
-  WriteINIStr $PSListFile "Photoshop" "Path$PSCount" "$0"
-  StrCmp $PSPATH "" 0 +2
-    StrCpy $PSPATH "$0"
-AddCandidate_Done:
-  Pop $1
-FunctionEnd
-
+; ---------- 小宏：尝试读取注册表字符串 ----------
+!macro TRY_READ REGROOT SUBKEY VALUENAME
+  ClearErrors
+  ReadRegStr $_tmp ${REGROOT} "${SUBKEY}" "${VALUENAME}"
+  IfErrors +2
+    StrCmp $_tmp "" +1 0
+  StrCmp $_tmp "" +6
+    ; 读到非空值：可能是目录或 EXE 完整路径
+    StrCpy $PSPATH "$_tmp"
+    StrCpy $_found "1"
+    Return
+!macroend
+; 把 $_tmp 规范化为 $PSPATH（目录）：
+; - $_tmp 是目录 => 直接命中
+; - $_tmp 是文件（exe 全路径）=> 取其父目录命中
+; - $_tmp 为空或不存在 => 不改 $_found
 Function NormalizeFromTmp
-  StrCmp $_tmp "" Normalize_Done
-  IfFileExists "$_tmp\*.*" 0 Normalize_CheckFile
-    Push $_tmp
-    Call AddCandidate
-    Goto Normalize_Done
-Normalize_CheckFile:
-  IfFileExists "$_tmp" 0 Normalize_Done
-    ${GetParent} "$_tmp" $0
-    StrCmp $0 "" Normalize_Done
-    Push $0
-    Call AddCandidate
-Normalize_Done:
+  StrCmp $_tmp "" done
+
+  ; 是目录？
+  IfFileExists "$_tmp\*.*" 0 +3
+    StrCpy $PSPATH "$_tmp"
+    StrCpy $_found "1"
+    Goto done
+
+  ; 是文件？
+  IfFileExists "$_tmp" 0 done
+    ${GetParent} "$_tmp" $PSPATH
+    StrCmp $PSPATH "" 0 +2
+    StrCpy $_found "1"
+
+done:
 FunctionEnd
-
-Function FillPSCombo
-  Pop $0
-  Push $1
-  Push $2
-  StrCpy $1 1
-FillPSCombo_Loop:
-  IntCmp $1 $PSCount FillPSCombo_Done FillPSCombo_Done FillPSCombo_Continue
-FillPSCombo_Continue:
-  ReadINIStr $2 $PSListFile "Photoshop" "Path$1"
-  StrCmp $2 "" FillPSCombo_Next
-  ${NSD_CB_AddString} $0 "$2"
-FillPSCombo_Next:
-  IntOp $1 $1 + 1
-  Goto FillPSCombo_Loop
-FillPSCombo_Done:
-  Pop $2
-  Pop $1
-FunctionEnd
-
-Function OnPSComboChange
-  Pop $0
-  ${NSD_CB_GetText} $HWND_PS_COMBO $PSPATH
-FunctionEnd
-
-Function OnSelectCustomPS
-  Pop $0
-  nsDialogs::SelectFolderDialog "选择 Photoshop 安装目录（包含 Photoshop.exe 的那一层）" "$PROGRAMFILES\Adobe"
-  Pop $1
-  StrCmp $1 "" OnSelectCustomPS_Done
-  IfFileExists "$1\Photoshop.exe" 0 OnSelectCustomPS_Invalid
-  StrCpy $PSPATH "$1"
-  StrCpy $_tmp "$1"
-  Call PathAlreadyRecorded
-  StrCmp $_found "1" OnSelectCustomPS_Existing
-  IntOp $PSCount $PSCount + 1
-  WriteINIStr $PSListFile "Photoshop" "Path$PSCount" "$PSPATH"
-  ${NSD_CB_AddString} $HWND_PS_COMBO "$PSPATH"
-  EnableWindow $HWND_PS_COMBO 1
-OnSelectCustomPS_Existing:
-  ${NSD_CB_SelectString} $HWND_PS_COMBO "$PSPATH"
-  ${NSD_SetText} $HWND_PS_INFO "请选择要安装的 Photoshop："
-  Goto OnSelectCustomPS_Done
-OnSelectCustomPS_Invalid:
-  MessageBox MB_ICONSTOP "选择的目录下未找到 Photoshop.exe，请重新选择。"
-OnSelectCustomPS_Done:
-FunctionEnd
-
-Function SelectPhotoshopPage
-  Push $R0
-  StrCpy $R0 $PSPATH
-  Call FindPhotoshop
-  IfFileExists "$R0\Photoshop.exe" 0 SelectPhotoshop_Create
-    Push $R0
-    Call AddCandidate
-    StrCpy $PSPATH "$R0"
-SelectPhotoshop_Create:
-  nsDialogs::Create 1018
-  Pop $0
-  ${If} $0 == error
-    Pop $R0
-    Abort
-  ${EndIf}
-
-  ${NSD_CreateLabel} 0 0 100% 18u "请选择要安装的 Photoshop："
-  Pop $HWND_PS_INFO
-
-  ${NSD_CreateDropList} 0 20u 100% 12u ""
-  Pop $HWND_PS_COMBO
-  Push $HWND_PS_COMBO
-  Call FillPSCombo
-  ${NSD_OnChange} $HWND_PS_COMBO OnPSComboChange
-
-  ${NSD_CreateButton} 0 40u 50% 14u "浏览其他版本..."
-  Pop $0
-  ${NSD_OnClick} $0 OnSelectCustomPS
-
-  ${NSD_CreateLabel} 0 60u 100% 30u "若列表为空或想安装到其他 Photoshop，请点击“浏览其他版本...”并选择包含 Photoshop.exe 的目录。"
-  Pop $HWND_PS_HELP
-
-  IntCmp $PSCount 0 SelectPhotoshop_NoList SelectPhotoshop_HasList SelectPhotoshop_HasList
-SelectPhotoshop_HasList:
-  StrCmp $PSPATH "" SelectPhotoshop_SetFirst
-  Goto SelectPhotoshop_DoSelect
-SelectPhotoshop_SetFirst:
-  ReadINIStr $PSPATH $PSListFile "Photoshop" "Path1"
-SelectPhotoshop_DoSelect:
-  ${NSD_CB_SelectString} $HWND_PS_COMBO "$PSPATH"
-  ${NSD_CB_GetText} $HWND_PS_COMBO $PSPATH
-  ${NSD_SetText} $HWND_PS_INFO "请选择要安装的 Photoshop："
-  Goto SelectPhotoshop_Show
-SelectPhotoshop_NoList:
-  EnableWindow $HWND_PS_COMBO 0
-  StrCpy $PSPATH ""
-  ${NSD_SetText} $HWND_PS_INFO "未检测到已安装的 Photoshop，请点击下方按钮手动选择。"
-SelectPhotoshop_Show:
-  nsDialogs::Show
-  Pop $R0
-FunctionEnd
-
-Function LeaveSelectPhotoshopPage
-  ${NSD_CB_GetText} $HWND_PS_COMBO $PSPATH
-  StrCmp "$PSPATH" "" LeaveSelectPhotoshop_NeedChoose
-  IfFileExists "$PSPATH\Photoshop.exe" 0 LeaveSelectPhotoshop_Invalid
-  Return
-LeaveSelectPhotoshop_NeedChoose:
-  MessageBox MB_ICONEXCLAMATION "请选择一个 Photoshop 安装目录，或点击“浏览其他版本...”手动选择。"
-  Abort
-LeaveSelectPhotoshop_Invalid:
-  MessageBox MB_ICONSTOP "所选目录下未找到 Photoshop.exe，请重新选择。"
-  Abort
-FunctionEnd
-
 Function PreInstallConfirm
+  ; 一个极简的 nsDialogs 页面，只有提示文本与“下一步”按钮
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 30u "将插件安装到：$PSPATH$$
-确认无误后点击“下一步”开始安装。"
+  ${NSD_CreateLabel} 0 0 100% 24u "将安装到已选择的 Photoshop。请确认后点击“下一步”开始安装。"
   Pop $1
 
   nsDialogs::Show
 FunctionEnd
 
 ; ---------- 查找 Photoshop ----------
+; 只做“自动检测”，不弹窗；手选放在 Section 里做
 Function FindPhotoshop
-  InitPluginsDir
-  StrCpy $PSListFile "$PLUGINSDIR\pspaths.ini"
-  Delete "$PSListFile"
-  StrCpy $PSCount 0
+  ; —— 只做自动检测，不弹窗；手选在 Section 里做 ——
   StrCpy $PSPATH ""
-  StrCpy $_tmp ""
+  StrCpy $_found  ""
+  StrCpy $_tmp    ""
 
+  ; ===== 64-bit 视图 =====
   SetRegView 64
+
+  ; HKLM\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
   StrCpy $0 0
 Find_HKLM64_Loop:
   ClearErrors
@@ -243,10 +105,12 @@ Find_HKLM64_Loop:
   IfErrors Find_HKCU64_Start
   ReadRegStr $_tmp HKLM "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
   IntOp $0 $0 + 1
   Goto Find_HKLM64_Loop
 
 Find_HKCU64_Start:
+  ; HKCU\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
   StrCpy $0 0
 Find_HKCU64_Loop:
   ClearErrors
@@ -254,16 +118,24 @@ Find_HKCU64_Loop:
   IfErrors Check_AppPaths64
   ReadRegStr $_tmp HKCU "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
   IntOp $0 $0 + 1
   Goto Find_HKCU64_Loop
 
 Check_AppPaths64:
+  ; App Paths\Photoshop.exe（默认值可能是 EXE 全路径）
   ReadRegStr $_tmp HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
   ReadRegStr $_tmp HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
 
+  ; ===== 32-bit 视图（兜底）=====
   SetRegView 32
+
+  ; HKLM\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
   StrCpy $0 0
 Find_HKLM32_Loop:
   ClearErrors
@@ -271,10 +143,12 @@ Find_HKLM32_Loop:
   IfErrors Find_HKCU32_Start
   ReadRegStr $_tmp HKLM "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
   IntOp $0 $0 + 1
   Goto Find_HKLM32_Loop
 
 Find_HKCU32_Start:
+  ; HKCU\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
   StrCpy $0 0
 Find_HKCU32_Loop:
   ClearErrors
@@ -282,15 +156,31 @@ Find_HKCU32_Loop:
   IfErrors Check_AppPaths32
   ReadRegStr $_tmp HKCU "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
   IntOp $0 $0 + 1
   Goto Find_HKCU32_Loop
 
 Check_AppPaths32:
   ReadRegStr $_tmp HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
   ReadRegStr $_tmp HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
   Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
+  ; 没找到就让 Section 后续的“常见目录 + 手选”接力
+  Goto done
+
+found_done:
+  ; 这里 $PSPATH 已是目录；若极端情况是 EXE 路径，NormalizeFromTmp 已取父目录
+  ; 不做 UI，仅返回 $PSPATH 供 Section 使用
+done:
 FunctionEnd
+
+
+
+
 ; ---------- 安装前置 ----------
 ; 不在 .onInit 里做任何检测或弹窗，避免启动即闪退
 Function .onInit
@@ -301,10 +191,8 @@ FunctionEnd
 Section "Install"
   SetShellVarContext all
 
-  ; 进入安装阶段再兜底检测（仅当前面页面未选定时）
-  StrCmp "$PSPATH" "" 0 +3
-    Call FindPhotoshop
-    StrCmp "$PSPATH" "" 0 +5
+  ; 进入安装阶段再检测（此时弹窗安全）
+  Call FindPhotoshop
 
   ; 若仍未检测到，则提示手动选择；循环直到选对或取消
   StrCmp "$PSPATH" "" 0 +5

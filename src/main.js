@@ -162,8 +162,9 @@ async function buildWin({ pluginDir, name, version, outDir, installerFileName })
     .replace(/__APP_PUBLISHER__/g, nsisEscape(appPublisher))
     .replace(/__APP_DIRNAME__/g, nsisEscape(appDirName))
     .replace(/__PAYLOAD_DIR__/g, nsisEscape(srcCopy));          // 模板里是 !define PAYLOAD_DIR __PAYLOAD_DIR__
+  console.log("Generated NSIS content:\n", nsi);  // 打印替换后的 nsi 内容
 
-  const defaultOutName = `Setup-${appNameFile}-${version}.exe`;
+  const defaultOutName = `${appNameFile}-${version}.exe`;
   const outName = resolveOutFileName(installerFileName, defaultOutName);
   nsi = nsi.replace(/(^|\n)\s*OutFile\s+"[^"]+"\s*/i, `\nOutFile "dist/${outName}"\n`);
 

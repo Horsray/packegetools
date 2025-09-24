@@ -1,256 +1,237 @@
-; ======== NSIS TEMPLATE (Windows installer) ========
-!include "MUI2.nsh"
-!include "nsDialogs.nsh"
-!include "FileFunc.nsh"
-!include "x64.nsh"
+; ===========================
+; HueyingAI Photoshop 插件 安装器（简化稳定版 · 修正版）
+; 保存为: installer.nsi
+; 准备: 将你的插件文件放在脚本同级目录的 payload\ 下
+; 编译: makensis installer.nsi
+; ===========================
 
-Unicode true
+Unicode True
 RequestExecutionLevel admin
 
-; --------- Defines (filled by main.js via string replace) ----------
-!define APP_NAME_FILE "__APP_NAME_FILE__"
-!define APP_VERSION   __APP_VERSION__
-!define APP_VERSION_4 __APP_VERSION_4__
-!define APP_PUBLISHER "__APP_PUBLISHER__"
-!define PAYLOAD_DIR   "__PAYLOAD_DIR__"
+!include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "nsDialogs.nsh"
 
-; 显示用名称（main.js 已做转义，这里直接放进引号）
-Name "__APP_NAME__"
+; ---------- 基本信息 ----------
+!define APP_NAME        "HueyingAI Photoshop 插件"
+!define APP_PUBLISHER   "Hueying Studio"
+!define APP_VERSION     "1.0.0"
+!define APP_DIRNAME     "HueyingAI"  ; 安装到 Plug-ins 下的目录名
+!define OUT_FILENAME    "HueyingAI_Plugin_Installer_${APP_VERSION}.exe"
 
-; 生成的安装器文件名（仅 ASCII）
-OutFile "dist\\Setup-__APP_NAME_FILE__-__APP_VERSION__.exe"
-VIProductVersion "${APP_VERSION_4}"
-VIAddVersionKey "FileDescription" "__APP_NAME__ 安装程序"
-VIAddVersionKey "ProductName" "__APP_NAME__"
-VIAddVersionKey "ProductVersion" "${APP_VERSION}"
-VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
-VIAddVersionKey "OriginalFilename" "Setup-__APP_NAME_FILE__-__APP_VERSION__.exe"
+Name        "${APP_NAME}"
+OutFile     "${OUT_FILENAME}"
+BrandingText "Installer • ${APP_PUBLISHER}"
 
-; --------- Variables ----------
-Var TARGET_DIR
-Var hCombo
-Var firstItem
+; InstallDir 只是占位；真正安装路径用 $PSPATH 拼出来
+InstallDir  "$PROGRAMFILES\${APP_DIRNAME}"
 
-!define UXP_FALLBACK "$LOCALAPPDATA\\Adobe\\UXP\\Plugins\\External\\__APP_NAME_FILE__"
-
-; --------- Pages ----------
-Page custom PageSelectPS PageSelectPS_Leave
+; ---------- UI 页面 ----------
+!define MUI_ABORTWARNING
+!insertmacro MUI_PAGE_WELCOME
+Page custom PreInstallConfirm
 !insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-; --------- Helper: 去引号 ---------
-Function _TrimQuotes
-  Exch $0
-  StrCpy $1 $0 1
-  StrCpy $2 $0 "" -1
-  StrCmp $1 "$\"" 0 +2
-    StrCpy $0 $0 "" 1
-  StrCmp $2 "$\"" 0 +2
-    StrCpy $0 $0 -1
-  Exch $0
-FunctionEnd
+; ---------- 变量 ----------
+Var PSPATH
+Var _found
+Var _tmp
 
-; $0 = 候选路径
-Function AddPSItem
-  ${If} $0 == ""
+; ---------- 小宏：尝试读取注册表字符串 ----------
+!macro TRY_READ REGROOT SUBKEY VALUENAME
+  ClearErrors
+  ReadRegStr $_tmp ${REGROOT} "${SUBKEY}" "${VALUENAME}"
+  IfErrors +2
+    StrCmp $_tmp "" +1 0
+  StrCmp $_tmp "" +6
+    ; 读到非空值：可能是目录或 EXE 完整路径
+    StrCpy $PSPATH "$_tmp"
+    StrCpy $_found "1"
     Return
-  ${EndIf}
-  Push $0
-  Call _TrimQuotes
-  Pop $0
+!macroend
+; 把 $_tmp 规范化为 $PSPATH（目录）：
+; - $_tmp 是目录 => 直接命中
+; - $_tmp 是文件（exe 全路径）=> 取其父目录命中
+; - $_tmp 为空或不存在 => 不改 $_found
+Function NormalizeFromTmp
+  StrCmp $_tmp "" done
 
-  ; Ensure the folder actually contains Photoshop.exe
-  StrCpy $1 $0 "" -13
-  ${If} "$1" == "Photoshop.exe"
-    IfFileExists "$0" has_ps 0
-  ${Else}
-    IfFileExists "$0\\Photoshop.exe" has_ps 0
-    IfFileExists "$0\\Required\\Photoshop.exe" has_ps 0
-  ${EndIf}
-  Return
-  has_ps:
-  StrCpy $1 $0 "" -13
-  
-  ; 若以 \Photoshop.exe 结尾，去掉文件名
-  ${If} "$1" == "Photoshop.exe"
-    StrLen $2 $0
-    IntOp $2 $2 - 13
-    StrCpy $0 $0 $2
-  ${EndIf}
+  ; 是目录？
+  IfFileExists "$_tmp\*.*" 0 +3
+    StrCpy $PSPATH "$_tmp"
+    StrCpy $_found "1"
+    Goto done
 
-  ${NSD_CB_SelectString} $hCombo "$0"
-  StrCmp $0 "CB_ERR" 0 +3
-    ${NSD_CB_AddString} $hCombo "$0"
-    ${If} $firstItem == ""
-      StrCpy $firstItem "$0"
-    ${EndIf}
+  ; 是文件？
+  IfFileExists "$_tmp" 0 done
+    ${GetParent} "$_tmp" $PSPATH
+    StrCmp $PSPATH "" 0 +2
+    StrCpy $_found "1"
+
+done:
 FunctionEnd
-
-Function EnumPSFromProgramFiles
-  ${If} ${RunningX64}
-    StrCpy $2 "$PROGRAMFILES64\\Adobe"
-    FindFirst $3 $4 "$2\\Adobe Photoshop*"
-    StrCmp $4 "" done64
-    loop64:
-      StrCpy $0 "$2\\$4"
-      Call AddPSItem
-      FindNext $3 $4
-      StrCmp $4 "" done64
-      Goto loop64
-    done64:
-      StrCmp $3 "error" done64_close_skip
-      FindClose $3
-    done64_close_skip:
-  ${EndIf}
-
-  StrCpy $2 "$PROGRAMFILES\\Adobe"
-  FindFirst $3 $4 "$2\\Adobe Photoshop*"
-  StrCmp $4 "" done86
-  loop86:
-    StrCpy $0 "$2\\$4"
-    Call AddPSItem
-    FindNext $3 $4
-    StrCmp $4 "" done86
-    Goto loop86
-  done86:
-    StrCmp $3 "error" done86_close_skip
-    FindClose $3
-  done86_close_skip:
-FunctionEnd
-
-Function EnumPSFromRegistry
-  ${If} ${RunningX64}
-    SetRegView 64
-    StrCpy $5 0
-    loop_reg64:
-      EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop" $5
-      StrCmp $6 "" done_reg64
-      ReadRegStr $7 HKLM "SOFTWARE\\Adobe\\Photoshop\\$6" "ApplicationPath"
-      ${If} $7 != ""
-        StrCpy $0 $7
-        Call AddPSItem
-      ${EndIf}
-      IntOp $5 $5 + 1
-      Goto loop_reg64
-    done_reg64:
-    ReadRegStr $7 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
-    SetRegView lastused
-  ${EndIf}
-
-  SetRegView 32
-  StrCpy $5 0
-  loop_reg32:
-    EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop" $5
-    StrCmp $6 "" done_reg32
-    ReadRegStr $7 HKLM "SOFTWARE\\Adobe\\Photoshop\\$6" "ApplicationPath"
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
-    IntOp $5 $5 + 1
-    Goto loop_reg32
-  done_reg32:
-  ReadRegStr $7 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-  ${If} $7 != ""
-    StrCpy $0 $7
-    Call AddPSItem
-  ${EndIf}
-  SetRegView lastused
- 
-  ${If} ${RunningX64}
-    SetRegView 64
-    StrCpy $5 0
-    loop_reg_cu64:
-      EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop" $5
-      StrCmp $6 "" done_reg_cu64
-      ReadRegStr $7 HKCU "SOFTWARE\\Adobe\\Photoshop\\$6" "ApplicationPath"
-      ${If} $7 != ""
-        StrCpy $0 $7
-        Call AddPSItem
-      ${EndIf}
-      IntOp $5 $5 + 1
-      Goto loop_reg_cu64
-    done_reg_cu64:
-    ReadRegStr $7 HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
-    SetRegView lastused
-  ${EndIf}
-
-  StrCpy $5 0
-  loop_reg_cu:
-    EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop" $5
-    StrCmp $6 "" done_reg_cu
-    ReadRegStr $7 HKCU "SOFTWARE\\Adobe\\Photoshop\\$6" "ApplicationPath"
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
-    IntOp $5 $5 + 1
-    Goto loop_reg_cu
-  done_reg_cu:
-  ReadRegStr $7 HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-  ${If} $7 != ""
-    StrCpy $0 $7
-    Call AddPSItem
-  ${EndIf}
-FunctionEnd
-
-Function PageSelectPS
+Function PreInstallConfirm
+  ; 一个极简的 nsDialogs 页面，只有提示文本与“下一步”按钮
   nsDialogs::Create 1018
   Pop $0
-
-  ${NSD_CreateLabel} 0 0 100% 20u "检测到以下 Photoshop（默认第一项）："
-  Pop $1
-
-  ${NSD_CreateDropList} 0 20u 100% 12u ""
-  Pop $hCombo
-
-  StrCpy $firstItem ""
-  Call EnumPSFromRegistry
-  Call EnumPSFromProgramFiles
-
-  ${NSD_CB_GetCount} $hCombo $3
-  ${If} $3 == 0
-    ${NSD_CB_AddString} $hCombo "（未检测到 Photoshop，将安装到：${UXP_FALLBACK}）"
-    ${NSD_CB_SelectString} $hCombo "（未检测到 Photoshop，将安装到：${UXP_FALLBACK}）"
-  ${Else}
-    ${NSD_CB_SelectString} $hCombo $firstItem
+  ${If} $0 == error
+    Abort
   ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 24u "将安装到已选择的 Photoshop。请确认后点击“下一步”开始安装。"
+  Pop $1
 
   nsDialogs::Show
 FunctionEnd
 
-Function PageSelectPS_Leave
-  ${NSD_GetText} $hCombo $1
+; ---------- 查找 Photoshop ----------
+; 只做“自动检测”，不弹窗；手选放在 Section 里做
+Function FindPhotoshop
+  ; —— 只做自动检测，不弹窗；手选在 Section 里做 ——
+  StrCpy $PSPATH ""
+  StrCpy $_found  ""
+  StrCpy $_tmp    ""
 
-  StrCpy $2 "（未检测到 Photoshop"
-  StrLen $3 $2
-  StrCpy $4 $1 $3
-  ${If} $4 == $2
-    StrCpy $TARGET_DIR "${UXP_FALLBACK}"
-  ${Else}
-    StrCpy $TARGET_DIR "$1\\Plug-ins\\__APP_NAME_FILE__"
-  ${EndIf}
+  ; ===== 64-bit 视图 =====
+  SetRegView 64
+
+  ; HKLM\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
+  StrCpy $0 0
+Find_HKLM64_Loop:
+  ClearErrors
+  EnumRegKey $1 HKLM "SOFTWARE\Adobe\Photoshop" $0
+  IfErrors Find_HKCU64_Start
+  ReadRegStr $_tmp HKLM "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+  IntOp $0 $0 + 1
+  Goto Find_HKLM64_Loop
+
+Find_HKCU64_Start:
+  ; HKCU\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
+  StrCpy $0 0
+Find_HKCU64_Loop:
+  ClearErrors
+  EnumRegKey $1 HKCU "SOFTWARE\Adobe\Photoshop" $0
+  IfErrors Check_AppPaths64
+  ReadRegStr $_tmp HKCU "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+  IntOp $0 $0 + 1
+  Goto Find_HKCU64_Loop
+
+Check_AppPaths64:
+  ; App Paths\Photoshop.exe（默认值可能是 EXE 全路径）
+  ReadRegStr $_tmp HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
+  ReadRegStr $_tmp HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
+  ; ===== 32-bit 视图（兜底）=====
+  SetRegView 32
+
+  ; HKLM\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
+  StrCpy $0 0
+Find_HKLM32_Loop:
+  ClearErrors
+  EnumRegKey $1 HKLM "SOFTWARE\Adobe\Photoshop" $0
+  IfErrors Find_HKCU32_Start
+  ReadRegStr $_tmp HKLM "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+  IntOp $0 $0 + 1
+  Goto Find_HKLM32_Loop
+
+Find_HKCU32_Start:
+  ; HKCU\SOFTWARE\Adobe\Photoshop\*\ApplicationPath  (默认值 "")
+  StrCpy $0 0
+Find_HKCU32_Loop:
+  ClearErrors
+  EnumRegKey $1 HKCU "SOFTWARE\Adobe\Photoshop" $0
+  IfErrors Check_AppPaths32
+  ReadRegStr $_tmp HKCU "SOFTWARE\Adobe\Photoshop\$1\ApplicationPath" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+  IntOp $0 $0 + 1
+  Goto Find_HKCU32_Loop
+
+Check_AppPaths32:
+  ReadRegStr $_tmp HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
+  ReadRegStr $_tmp HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe" ""
+  Call NormalizeFromTmp
+  StrCmp $_found "1" found_done 0
+
+  ; 没找到就让 Section 后续的“常见目录 + 手选”接力
+  Goto done
+
+found_done:
+  ; 这里 $PSPATH 已是目录；若极端情况是 EXE 路径，NormalizeFromTmp 已取父目录
+  ; 不做 UI，仅返回 $PSPATH 供 Section 使用
+done:
 FunctionEnd
 
+
+
+
+; ---------- 安装前置 ----------
+; 不在 .onInit 里做任何检测或弹窗，避免启动即闪退
+Function .onInit
+FunctionEnd
+
+
+; ---------- 安装 ----------
 Section "Install"
-  SetOverwrite on
-  CreateDirectory "$TARGET_DIR"
-  SetOutPath "$TARGET_DIR"
-  File /r "${PAYLOAD_DIR}\\*.*"
+  SetShellVarContext all
 
-  DetailPrint "安装路径：$TARGET_DIR"
+  ; 进入安装阶段再检测（此时弹窗安全）
+  Call FindPhotoshop
+
+  ; 若仍未检测到，则提示手动选择；循环直到选对或取消
+  StrCmp "$PSPATH" "" 0 +5
+    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "未能自动找到 Photoshop 安装目录。是否手动选择？$\r$\n（请选择包含 Photoshop.exe 的目录）" IDCANCEL _abort_install
+    nsDialogs::SelectFolderDialog "选择 Photoshop 安装目录（包含 Photoshop.exe 的那一层）" "$PROGRAMFILES\Adobe"
+    Pop $PSPATH
+    StrCmp "$PSPATH" "" _abort_install
+    IfFileExists "$PSPATH\Photoshop.exe" 0 _retry_select
+
+  ; 到这里 $PSPATH 一定有效
+  DetailPrint "使用 Photoshop 目录：$PSPATH"
+
+  ; 安装到：<PS>\Plug-ins\${APP_DIRNAME}
+  StrCpy $INSTDIR "$PSPATH\Plug-ins\${APP_DIRNAME}"
+  CreateDirectory "$INSTDIR"
+  SetOutPath "$INSTDIR"
+  File /r "payload\*.*"
+
+  ; 写入卸载器
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+  DetailPrint "已安装到：$INSTDIR"
+  Goto _end
+
+_retry_select:
+  MessageBox MB_ICONSTOP "选择的目录下未找到 Photoshop.exe，请重试。"
+  Goto -6  ; 回到 MessageBox 询问是否手选
+
+_abort_install:
+  MessageBox MB_ICONINFORMATION "已取消安装。"
+  Abort
+
+_end:
 SectionEnd
 
+
+; ---------- 卸载 ----------
 Section "Uninstall"
-  RMDir /r "$TARGET_DIR"
+  SetShellVarContext all
+  RMDir /r "$INSTDIR"
+  DetailPrint "已卸载：$INSTDIR"
 SectionEnd
-
-; ========== END ==========

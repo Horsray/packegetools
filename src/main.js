@@ -114,6 +114,21 @@ async function buildWin({ pluginDir, name, version, outDir }) {
   const appNameFile = String(name)
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/[^\x20-\x7E]/g, '_'); // ASCII-only
+  const pluginBaseName = path.basename(path.resolve(pluginDir));
+  const appDirName = (pluginBaseName && pluginBaseName !== '.'
+    ? pluginBaseName
+    : appNameDisplay
+  ) || appNameDisplay || appNameFile;
+  const numericParts = String(version).match(/\d+/g) || [];
+  const productVersion = [...numericParts, '0', '0', '0', '0']
+    .slice(0, 4)
+    .map((part) => {
+      const num = Number.parseInt(part, 10);
+      if (!Number.isFinite(num) || num < 0) return '0';
+      return String(Math.min(num, 65535));
+    })
+    .join('.');
+  const appPublisher = appNameDisplay.trim() || appNameFile;
   const nsisEscape = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   const nsisT = await fs.promises.readFile(
@@ -130,8 +145,11 @@ async function buildWin({ pluginDir, name, version, outDir }) {
     // 这些占位符在模板中已位于引号或 define 环境中，这里不要再额外加引号！
     .replace(/__APP_NAME_FILE__/g, appNameFile)                 // ASCII 安全
     .replace(/__APP_VERSION__/g, version)                       // 纯字面量
+    .replace(/__APP_VERSION_4__/g, productVersion)              // VIProductVersion
     .replace(/__APP_NAME__/g, nsisEscape(appNameDisplay))       // 模板里已 "Name "__APP_NAME__""
     .replace(/__APP_NAME_WIN__/g, nsisEscape(appNameDisplay))   // 若模板使用，通常也在引号内
+    .replace(/__APP_PUBLISHER__/g, nsisEscape(appPublisher))
+    .replace(/__APP_DIRNAME__/g, nsisEscape(appDirName))
     .replace(/__PAYLOAD_DIR__/g, nsisEscape(srcCopy));          // 模板里是 !define PAYLOAD_DIR __PAYLOAD_DIR__
 
   const outName = `Setup-${appNameFile}-${version}.exe`;

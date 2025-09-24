@@ -94,6 +94,33 @@ Function _TrimQuotes
   Exch $0
 FunctionEnd
 
+Function _NormalizeForwardSlashes
+  Exch $0
+  Push $1
+  Push $2
+  Push $3
+
+  StrCpy $1 0
+  StrCpy $2 ""
+
+  normalize_loop:
+    StrCpy $3 $0 1 $1
+    StrCmp $3 "" normalize_done
+    IntOp $1 $1 + 1
+    StrCmp $3 "/" 0 +3
+      StrCpy $3 "\\"
+    StrCpy $2 "$2$3"
+    Goto normalize_loop
+
+  normalize_done:
+    StrCpy $0 $2
+
+  Pop $3
+  Pop $2
+  Pop $1
+  Exch $0
+FunctionEnd
+
 ; $0 = 候选路径
 Function AddPSItem
   ${If} $0 == ""
@@ -107,7 +134,9 @@ Function AddPSItem
     Return
   ${EndIf}
 
-  !insertmacro StrRep $0 $0 "/" "\\"
+  Push $0
+  Call _NormalizeForwardSlashes
+  Pop $0
   ExpandEnvStrings $0 $0
 
   trim_space_loop:

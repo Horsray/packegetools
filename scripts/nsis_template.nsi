@@ -2,10 +2,14 @@
 !include "MUI2.nsh"
 !include "nsDialogs.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "System.nsh"
 !include "x64.nsh"
 
+!define CB_FINDSTRINGEXACT 0x0158
+
 Unicode true
-RequestExecutionLevel admin
+RequestExecutionLevel highest
 
 ; --------- Defines (filled by main.js via string replace) ----------
 !define APP_NAME_FILE "__APP_NAME_FILE__"
@@ -20,12 +24,17 @@ Name "__APP_NAME__"
 
 ; 生成的安装器文件名（仅 ASCII）
 OutFile "dist\\Setup-__APP_NAME_FILE__-__APP_VERSION__.exe"
+SetCompressor /SOLID lzma
+CRCCheck on
 VIProductVersion "${APP_VERSION_4}"
 VIAddVersionKey "FileDescription" "__APP_NAME__ 安装程序"
 VIAddVersionKey "ProductName" "__APP_NAME__"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "OriginalFilename" "Setup-__APP_NAME_FILE__-__APP_VERSION__.exe"
+VIAddVersionKey "FileVersion" "${APP_VERSION}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) ${APP_PUBLISHER}"
+VIAddVersionKey "Comments" "__APP_NAME__ Windows 安装器"
 
 ; --------- Variables ----------
 Var TARGET_DIR
@@ -33,6 +42,39 @@ Var hCombo
 Var firstItem
 
 !define UXP_FALLBACK "$LOCALAPPDATA\\Adobe\\UXP\\Plugins\\External\\__APP_DIRNAME__"
+
+!macro ADD_REG_STR ROOT KEY VALUE
+  ClearErrors
+  ReadRegStr $7 ${ROOT} "${KEY}" "${VALUE}"
+  IfErrors +3
+  StrCpy $0 $7
+  Call AddPSItem
+!macroend
+
+!macro ENUM_REG_VALUES ROOT KEY ID
+  StrCpy $8 0
+${ID}_loop:
+  EnumRegValue $9 ${ROOT} "${KEY}" $8
+  StrCmp $9 "" ${ID}_done
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "$9"
+  IntOp $8 $8 + 1
+  Goto ${ID}_loop
+${ID}_done:
+!macroend
+
+!macro PROCESS_PS_KEY ROOT KEY ID
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" ""
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "ApplicationPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "InstallPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "InstallPathMT"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "PluginInstallPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "PluginPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "PluginsPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "PluginsRoot"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "ParentPath"
+  !insertmacro ADD_REG_STR ${ROOT} "${KEY}" "Path"
+  !insertmacro ENUM_REG_VALUES ${ROOT} "${KEY}" ${ID}
+!macroend
 
 ; --------- Pages ----------
 Page custom PageSelectPS PageSelectPS_Leave
@@ -60,31 +102,80 @@ Function AddPSItem
   Call _TrimQuotes
   Pop $0
 
-  ; Ensure the folder actually contains Photoshop.exe
-  StrCpy $1 $0 "" -13
-  ${If} "$1" == "Photoshop.exe"
-    IfFileExists "$0" has_ps 0
-  ${Else}
-    IfFileExists "$0\\Photoshop.exe" has_ps 0
-    IfFileExists "$0\\Required\\Photoshop.exe" has_ps 0
+  ${If} $0 == ""
+    Return
   ${EndIf}
-  Return
-  has_ps:
+
+  !insertmacro StrRep $0 $0 "/" "\\"
+  ExpandEnvStrings $0 $0
+
+  trim_space_loop:
+    StrLen $2 $0
+    IntCmp $2 0 trim_space_done
+    StrCpy $1 $0 "" -1
+    StrCmp $1 " " 0 trim_space_done
+    IntOp $2 $2 - 1
+    StrCpy $0 $0 $2
+    Goto trim_space_loop
+  trim_space_done:
+
+  trim_loop:
+    StrLen $2 $0
+    IntCmp $2 0 trim_done
+    StrCpy $1 $0 "" -1
+    StrCmp $1 "\\" 0 trim_done
+    IntCmp $2 3 trim_done
+    IntCmp $2 2 trim_done
+    IntOp $2 $2 - 1
+    StrCpy $0 $0 $2
+    Goto trim_loop
+  trim_done:
+
+  StrCpy $1 $0 "" -9
+  StrCmp $1 "\\Required" 0 +4
+    StrLen $2 $0
+    IntOp $2 $2 - 9
+    StrCpy $0 $0 $2
+    Goto trim_loop
+
   StrCpy $1 $0 "" -13
-  
-  ; 若以 \Photoshop.exe 结尾，去掉文件名
   ${If} "$1" == "Photoshop.exe"
+    IfFileExists "$0" 0 not_found
     StrLen $2 $0
     IntOp $2 $2 - 13
     StrCpy $0 $0 $2
+  ${Else}
+    IfFileExists "$0\\Photoshop.exe" 0 check_required
+    Goto found
+    check_required:
+    IfFileExists "$0\\Required\\Photoshop.exe" 0 not_found
   ${EndIf}
+found:
 
-  ${NSD_CB_SelectString} $hCombo "$0"
-  StrCmp $0 "CB_ERR" 0 +3
+  trim_loop2:
+    StrLen $2 $0
+    IntCmp $2 0 trim_done2
+    StrCpy $1 $0 "" -1
+    StrCmp $1 "\\" 0 trim_done2
+    IntCmp $2 3 trim_done2
+    IntCmp $2 2 trim_done2
+    IntOp $2 $2 - 1
+    StrCpy $0 $0 $2
+    Goto trim_loop2
+  trim_done2:
+
+  System::Call 'user32::SendMessageW(p $hCombo, i ${CB_FINDSTRINGEXACT}, i -1, w "$0") i.r3'
+  IntCmp $3 -1 add_item add_item already
+  add_item:
     ${NSD_CB_AddString} $hCombo "$0"
+    DetailPrint "检测到 Photoshop：$0"
     ${If} $firstItem == ""
       StrCpy $firstItem "$0"
     ${EndIf}
+  already:
+    Return
+  not_found:
+    Return
 FunctionEnd
 
 Function EnumPSFromProgramFiles
@@ -102,6 +193,19 @@ Function EnumPSFromProgramFiles
       StrCmp $3 "error" done64_close_skip
       FindClose $3
     done64_close_skip:
+
+    FindFirst $3 $4 "$2\\Adobe Photoshop Beta*"
+    StrCmp $4 "" done64b
+    loop64b:
+      StrCpy $0 "$2\\$4"
+      Call AddPSItem
+      FindNext $3 $4
+      StrCmp $4 "" done64b
+      Goto loop64b
+    done64b:
+      StrCmp $3 "error" done64b_close_skip
+      FindClose $3
+    done64b_close_skip:
   ${EndIf}
 
   StrCpy $2 "$PROGRAMFILES\\Adobe"
@@ -117,90 +221,123 @@ Function EnumPSFromProgramFiles
     StrCmp $3 "error" done86_close_skip
     FindClose $3
   done86_close_skip:
+  FindFirst $3 $4 "$2\\Adobe Photoshop Beta*"
+  StrCmp $4 "" done86b
+  loop86b:
+    StrCpy $0 "$2\\$4"
+    Call AddPSItem
+    FindNext $3 $4
+    StrCmp $4 "" done86b
+    Goto loop86b
+  done86b:
+    StrCmp $3 "error" done86b_close_skip
+    FindClose $3
+  done86b_close_skip:
 FunctionEnd
 
 Function EnumPSFromRegistry
   ${If} ${RunningX64}
     SetRegView 64
     StrCpy $5 0
-    loop_reg64:
+    loop_lm64:
       EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop" $5
-      StrCmp $6 "" done_reg64
-      ReadRegStr $7 HKLM "SOFTWARE\\Adobe\\Photoshop\\$6\\ApplicationPath" ""
-      ${If} $7 != ""
-        StrCpy $0 $7
-        Call AddPSItem
-      ${EndIf}
+      StrCmp $6 "" done_lm64
+      !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop\\$6" LM64_PS
       IntOp $5 $5 + 1
-      Goto loop_reg64
-    done_reg64:
-    ReadRegStr $7 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
+      Goto loop_lm64
+    done_lm64:
+    !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop" LM64_ROOT
+
+    StrCpy $5 0
+    loop_lm64_beta:
+      EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop Beta" $5
+      StrCmp $6 "" done_lm64_beta
+      !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop Beta\\$6" LM64_PSB
+      IntOp $5 $5 + 1
+      Goto loop_lm64_beta
+    done_lm64_beta:
+    !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop Beta" LM64_PSB_ROOT
+
+    !insertmacro ADD_REG_STR HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
+    !insertmacro ADD_REG_STR HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotoshopBeta.exe" ""
     SetRegView lastused
   ${EndIf}
 
   SetRegView 32
   StrCpy $5 0
-  loop_reg32:
+  loop_lm32:
     EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop" $5
-    StrCmp $6 "" done_reg32
-    ReadRegStr $7 HKLM "SOFTWARE\\Adobe\\Photoshop\\$6\\ApplicationPath" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
+    StrCmp $6 "" done_lm32
+    !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop\\$6" LM32_PS
     IntOp $5 $5 + 1
-    Goto loop_reg32
-  done_reg32:
-  ReadRegStr $7 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-  ${If} $7 != ""
-    StrCpy $0 $7
-    Call AddPSItem
-  ${EndIf}
+    Goto loop_lm32
+  done_lm32:
+  !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop" LM32_ROOT
+
+  StrCpy $5 0
+  loop_lm32_beta:
+    EnumRegKey $6 HKLM "SOFTWARE\\Adobe\\Photoshop Beta" $5
+    StrCmp $6 "" done_lm32_beta
+    !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop Beta\\$6" LM32_PSB
+    IntOp $5 $5 + 1
+    Goto loop_lm32_beta
+  done_lm32_beta:
+  !insertmacro PROCESS_PS_KEY HKLM "SOFTWARE\\Adobe\\Photoshop Beta" LM32_PSB_ROOT
+
+  !insertmacro ADD_REG_STR HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
+  !insertmacro ADD_REG_STR HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotoshopBeta.exe" ""
   SetRegView lastused
- 
+
   ${If} ${RunningX64}
     SetRegView 64
     StrCpy $5 0
-    loop_reg_cu64:
+    loop_cu64:
       EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop" $5
-      StrCmp $6 "" done_reg_cu64
-      ReadRegStr $7 HKCU "SOFTWARE\\Adobe\\Photoshop\\$6\\ApplicationPath" ""
-      ${If} $7 != ""
-        StrCpy $0 $7
-        Call AddPSItem
-      ${EndIf}
+      StrCmp $6 "" done_cu64
+      !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop\\$6" CU64_PS
       IntOp $5 $5 + 1
-      Goto loop_reg_cu64
-    done_reg_cu64:
-    ReadRegStr $7 HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
+      Goto loop_cu64
+    done_cu64:
+    !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop" CU64_ROOT
+
+    StrCpy $5 0
+    loop_cu64_beta:
+      EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop Beta" $5
+      StrCmp $6 "" done_cu64_beta
+      !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop Beta\\$6" CU64_PSB
+      IntOp $5 $5 + 1
+      Goto loop_cu64_beta
+    done_cu64_beta:
+    !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop Beta" CU64_PSB_ROOT
+
+    !insertmacro ADD_REG_STR HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
+    !insertmacro ADD_REG_STR HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotoshopBeta.exe" ""
     SetRegView lastused
   ${EndIf}
 
   StrCpy $5 0
-  loop_reg_cu:
+  loop_cu32:
     EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop" $5
-    StrCmp $6 "" done_reg_cu
-    ReadRegStr $7 HKCU "SOFTWARE\\Adobe\\Photoshop\\$6\\ApplicationPath" ""
-    ${If} $7 != ""
-      StrCpy $0 $7
-      Call AddPSItem
-    ${EndIf}
+    StrCmp $6 "" done_cu32
+    !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop\\$6" CU32_PS
     IntOp $5 $5 + 1
-    Goto loop_reg_cu
-  done_reg_cu:
-  ReadRegStr $7 HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
-  ${If} $7 != ""
-    StrCpy $0 $7
-    Call AddPSItem
-  ${EndIf}
+    Goto loop_cu32
+  done_cu32:
+  !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop" CU32_ROOT
+
+  StrCpy $5 0
+  loop_cu32_beta:
+    EnumRegKey $6 HKCU "SOFTWARE\\Adobe\\Photoshop Beta" $5
+    StrCmp $6 "" done_cu32_beta
+    !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop Beta\\$6" CU32_PSB
+    IntOp $5 $5 + 1
+    Goto loop_cu32_beta
+  done_cu32_beta:
+  !insertmacro PROCESS_PS_KEY HKCU "SOFTWARE\\Adobe\\Photoshop Beta" CU32_PSB_ROOT
+
+  !insertmacro ADD_REG_STR HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Photoshop.exe" ""
+  !insertmacro ADD_REG_STR HKCU "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotoshopBeta.exe" ""
+  SetRegView lastused
 FunctionEnd
 
 Function PageSelectPS
@@ -221,6 +358,7 @@ Function PageSelectPS
   ${If} $3 == 0
     ${NSD_CB_AddString} $hCombo "（未检测到 Photoshop，将安装到：${UXP_FALLBACK}）"
     ${NSD_CB_SelectString} $hCombo "（未检测到 Photoshop，将安装到：${UXP_FALLBACK}）"
+    DetailPrint "未在系统中发现 Photoshop，默认安装到：${UXP_FALLBACK}"
   ${Else}
     ${NSD_CB_SelectString} $hCombo $firstItem
   ${EndIf}
@@ -243,17 +381,35 @@ FunctionEnd
 
 Section "Install"
   SetOverwrite on
-  IfFileExists "$TARGET_DIR\\*.*" 0 +2
+  ClearErrors
+  IfFileExists "$TARGET_DIR\\*.*" 0 skip_remove
     RMDir /r "$TARGET_DIR"
+    IfErrors 0 +3
+      MessageBox MB_ICONEXCLAMATION "无法删除已有的插件目录：$TARGET_DIR$\n请确认 Photoshop 已关闭。"
+      ClearErrors
+  skip_remove:
+  ClearErrors
   CreateDirectory "$TARGET_DIR"
+  IfErrors 0 +3
+    MessageBox MB_ICONSTOP "无法创建目录：$TARGET_DIR$\n请以管理员身份运行安装程序。"
+    Abort
   SetOutPath "$TARGET_DIR"
+  ClearErrors
   File /r "${PAYLOAD_DIR}\\*.*"
+  IfErrors 0 +3
+    MessageBox MB_ICONSTOP "复制插件文件失败：$TARGET_DIR$\n请确认权限后重试。"
+    Abort
 
   DetailPrint "安装路径：$TARGET_DIR"
 SectionEnd
 
 Section "Uninstall"
+  StrCmp $TARGET_DIR "" skip_uninstall
   RMDir /r "$TARGET_DIR"
+  Goto uninstall_end
+  skip_uninstall:
+  DetailPrint "未找到已记录的安装路径，跳过卸载。"
+  uninstall_end:
 SectionEnd
 
 ; ========== END ==========

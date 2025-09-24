@@ -5,7 +5,9 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+!ifndef CB_FINDSTRINGEXACT
 !define CB_FINDSTRINGEXACT 0x0158
+!endif
 
 Unicode true
 RequestExecutionLevel admin

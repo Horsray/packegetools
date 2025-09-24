@@ -8,7 +8,7 @@ Unicode true
 RequestExecutionLevel admin
 
 ; --------- Defines (filled by main.js via string replace) ----------
-!define APP_NAME_FILE __APP_NAME_FILE__
+!define APP_NAME_FILE "__APP_NAME_FILE__"
 !define APP_VERSION   __APP_VERSION__
 !define PAYLOAD_DIR   "__PAYLOAD_DIR__"
 
@@ -35,9 +35,9 @@ Function _TrimQuotes
   Exch $0
   StrCpy $1 $0 1
   StrCpy $2 $0 "" -1
-  StrCmp $1 "\"" 0 +2
+  StrCmp $1 "$\"" 0 +2
     StrCpy $0 $0 "" 1
-  StrCmp $2 "\"" 0 +2
+  StrCmp $2 "$\"" 0 +2
     StrCpy $0 $0 -1
   Exch $0
 FunctionEnd

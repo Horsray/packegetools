@@ -29,6 +29,14 @@
         <label>版本号：</label>
         <input id="version" type="text" value="1.0.0" />
       </div>
+      <div class="row">
+        <label>安装包文件名：</label>
+        <input
+          id="installerName"
+          type="text"
+          placeholder="留空则自动生成（例如：Setup-插件名-版本号.exe）"
+        />
+      </div>
       <div class="row btns">
         <button id="mac">打包 macOS（.pkg）</button>
         <button id="win">打包 Windows（.exe）</button>

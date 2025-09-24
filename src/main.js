@@ -55,6 +55,17 @@ function sanitize(name) {
   return String(name).replace(/[\\/:*?"<>|]/g, '_').trim();
 }
 
+function resolveOutFileName(requested, fallback) {
+  const sanitized = sanitize(requested || '');
+  const baseWithoutExt = sanitized.replace(/\.exe$/i, '').trim();
+  const meaningful = baseWithoutExt.replace(/[_\.-]/g, '').trim();
+  let finalName = sanitized && baseWithoutExt && meaningful ? sanitized : fallback;
+  if (!/\.exe$/i.test(finalName)) {
+    finalName += '.exe';
+  }
+  return finalName;
+}
+
 // ========== 目录选择 ==========
 ipcMain.handle('select-folder', async (_evt, defaultPathFromUI) => {
   const res = await dialog.showOpenDialog({
@@ -109,7 +120,7 @@ async function buildMac({ pluginDir, name, version, outDir }) {
 }
 
 // ========== win: NSIS ==========
-async function buildWin({ pluginDir, name, version, outDir }) {
+async function buildWin({ pluginDir, name, version, outDir, installerFileName }) {
   const appNameDisplay = String(name); // 用于 Name/显示（可中文）
   const appNameFile = String(name)
     .replace(/[\\/:*?"<>|]/g, '_')
@@ -152,7 +163,8 @@ async function buildWin({ pluginDir, name, version, outDir }) {
     .replace(/__APP_DIRNAME__/g, nsisEscape(appDirName))
     .replace(/__PAYLOAD_DIR__/g, nsisEscape(srcCopy));          // 模板里是 !define PAYLOAD_DIR __PAYLOAD_DIR__
 
-  const outName = `Setup-${appNameFile}-${version}.exe`;
+  const defaultOutName = `Setup-${appNameFile}-${version}.exe`;
+  const outName = resolveOutFileName(installerFileName, defaultOutName);
   nsi = nsi.replace(/(^|\n)\s*OutFile\s+"[^"]+"\s*/i, `\nOutFile "dist/${outName}"\n`);
 
   const nsiPath = path.join(work, 'installer.nsi');
@@ -172,7 +184,7 @@ async function buildWin({ pluginDir, name, version, outDir }) {
 }
 
 // ========== 打包入口 ==========
-ipcMain.handle('build', async (_evt, { platform, pluginDir, name, version }) => {
+ipcMain.handle('build', async (_evt, { platform, pluginDir, name, version, installerFileName }) => {
   const outDir = path.join(path.dirname(pluginDir), 'dist');
   try {
     if (buildRunning) return { ok: false, error: '正在打包中，请稍候完成后再试' };
@@ -186,7 +198,7 @@ ipcMain.handle('build', async (_evt, { platform, pluginDir, name, version }) => 
       await buildMac({ pluginDir, name: displayName, version: pkgVersion, outDir });
     }
     if (platform === 'win' || platform === 'both') {
-      await buildWin({ pluginDir, name: displayName, version: pkgVersion, outDir });
+      await buildWin({ pluginDir, name: displayName, version: pkgVersion, outDir, installerFileName });
     }
 
     return { ok: true, outDir };

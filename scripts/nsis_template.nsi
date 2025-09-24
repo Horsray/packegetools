@@ -3,13 +3,12 @@
 !include "nsDialogs.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
-!include "System.nsh"
 !include "x64.nsh"
 
 !define CB_FINDSTRINGEXACT 0x0158
 
 Unicode true
-RequestExecutionLevel highest
+RequestExecutionLevel admin
 
 ; --------- Defines (filled by main.js via string replace) ----------
 !define APP_NAME_FILE "__APP_NAME_FILE__"
@@ -131,12 +130,46 @@ Function AddPSItem
     Goto trim_loop
   trim_done:
 
+  StrLen $2 $0
+  IntCmp $2 9 skip_required skip_required check_required
+check_required:
   StrCpy $1 $0 "" -9
-  StrCmp $1 "\\Required" 0 +4
-    StrLen $2 $0
-    IntOp $2 $2 - 9
-    StrCpy $0 $0 $2
-    Goto trim_loop
+  StrCmp $1 "Required" 0 skip_required
+  StrCpy $3 $0 1 -10
+  StrCmp $3 "\\" 0 skip_required
+  IntOp $2 $2 - 9
+  StrCpy $0 $0 $2
+  Goto trim_loop
+skip_required:
+
+  StrLen $2 $0
+  IntCmp $2 8 skip_plugins skip_plugins check_plugins
+check_plugins:
+  StrCpy $1 $0 "" -8
+  ${If} "$1" == "Plug-ins"
+  ${OrIf} "$1" == "Plug-Ins"
+    StrCpy $4 $0 1 -9
+    StrCmp $4 "\\" remove_plugins_dir skip_plugins_dir
+remove_plugins_dir:
+      IntOp $2 $2 - 8
+      StrCpy $0 $0 $2
+      Goto trim_loop
+skip_plugins_dir:
+  ${EndIf}
+  IntCmp $2 7 skip_plugins skip_plugins check_plugins2
+check_plugins2:
+  StrCpy $1 $0 "" -7
+  ${If} "$1" == "PlugIns"
+  ${OrIf} "$1" == "Plugins"
+    StrCpy $4 $0 1 -8
+    StrCmp $4 "\\" remove_plugins_dir2 skip_plugins_dir2
+remove_plugins_dir2:
+      IntOp $2 $2 - 7
+      StrCpy $0 $0 $2
+      Goto trim_loop
+skip_plugins_dir2:
+  ${EndIf}
+skip_plugins:
 
   StrCpy $1 $0 "" -13
   ${If} "$1" == "Photoshop.exe"
@@ -164,7 +197,7 @@ found:
     Goto trim_loop2
   trim_done2:
 
-  System::Call 'user32::SendMessageW(p $hCombo, i ${CB_FINDSTRINGEXACT}, i -1, w "$0") i.r3'
+  SendMessage $hCombo ${CB_FINDSTRINGEXACT} -1 "STR:$0" $3
   IntCmp $3 -1 add_item add_item already
   add_item:
     ${NSD_CB_AddString} $hCombo "$0"
